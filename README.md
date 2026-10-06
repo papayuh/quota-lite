@@ -96,9 +96,12 @@ stdin is a terminal. Without a terminal, missing config produces an actionable
 error; no hanging prompt. JSON goes only to stdout; prompts/errors go to stderr.
 Exit status: 0 success, 2 invalid arguments/config or IO failure.
 
-Config lives in `$XDG_CONFIG_HOME/quota-lite/config.json` or
+Config lives in `$XDG_CONFIG_HOME/quota-lite/config.json`, then
+`%APPDATA%\quota-lite\config.json` on Windows, then
 `~/.config/quota-lite/config.json`. `budget set` preserves pricing overrides.
 Logs come from `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`.
+Home is `HOME`, else `USERPROFILE` (Windows); it is only needed when the
+overrides above are unset.
 Only Claude API assistant entries (model ids starting `claude-`) count as usage;
 synthetic, missing-model, non-Claude, user and tool records are excluded.
 Only `projects/<project>/*.jsonl` and
@@ -110,16 +113,20 @@ Symlink log entries are skipped. Config symlinks are refused.
 All reports use the **current UTC calendar period**: midnight-to-midnight day,
 Monday-to-Monday week, or first-to-first calendar month. Reports do not include
 past periods or future-dated messages. Total tokens include input, output,
-cache-read and cache-creation tokens. Assistant message ids deduplicate streaming
-snapshots within each log file (latest snapshot wins); duplicated/copied logs
-across different files can double count. Synthetic tests cover this behavior.
+cache-read and cache-creation tokens. Assistant message ids deduplicate across
+all log files, covering streaming snapshots and history copied by resumed
+sessions (latest snapshot wins; files are read in name order). Log files not
+modified since the period started are not read, since logs are append-only.
+Synthetic tests cover this behavior.
 
 Burn is observed usage divided by elapsed time since the period started.
 Projected hit date assumes that rate continues; it is UTC, date-only, and can
 fall after the period resets (`projection_within_window: false`). Exhausted
 budgets show today, not a claimed historical crossing date. Zero usage, zero
-elapsed time, unknown prices in USD mode, malformed lines, or unreadable paths
-suppress projections. Missing historical logs bias burn downwards. No projection
+elapsed time, or unknown prices in USD mode suppress projections. Malformed
+lines or unreadable paths in files modified this period are counted and flagged
+in `attention`; remaining, burn and projection are still shown as
+partial-coverage estimates. Missing historical logs bias burn downwards. No projection
 is a vendor prediction or a promise. `observed_spent` is a **lower bound** when
 prices are missing, with remaining/projection unknown. `attention` explicitly
 reports incomplete evidence. No logs means zero *observed*, not zero actual.

@@ -120,11 +120,30 @@ fn overrides_malformed_and_subagents() {
     fs::create_dir_all(&sub).unwrap();
     let content = fs::read(s.0.join("claude/projects/synthetic-project/session.jsonl")).unwrap();
     fs::write(sub.join("agent.jsonl"), content).unwrap();
-    assert_eq!(s.json(&["--json"])["messages"], 2);
+    let r = s.json(&["--json"]);
+    assert_eq!(r["messages"], 1);
+    assert_eq!(r["observed_spent"], 0.0018);
     s.logs("not json\n");
     let r = s.json(&["--json"]);
     assert_eq!(r["skipped_lines"], 1);
-    assert!(r["burn_per_day"].is_null());
+    assert_eq!(r["messages"], 1);
+    assert!(r["burn_per_day"].as_f64().unwrap() > 0.0);
+    assert!(r["remaining"].as_f64().is_some());
+    assert!(r["projected_budget_hit"].is_string());
+    assert!(r["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("partial-coverage estimates")));
+    fs::File::options()
+        .write(true)
+        .open(s.0.join("claude/projects/synthetic-project/session.jsonl"))
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(86400))
+        .unwrap();
+    let r = s.json(&["--json"]);
+    assert_eq!(r["skipped_lines"], 0);
+    assert_eq!(r["files_read"], 1);
     c["prices"]["claude-sonnet-4-20250514"]["input"] = Value::from(-1);
     fs::write(path, serde_json::to_vec(&c).unwrap()).unwrap();
     assert!(!s.run(&["--json"]).status.success());
@@ -176,4 +195,42 @@ fn refuses_log_and_config_symlinks() {
         .run(&["budget", "set", "2", "--per", "day"])
         .status
         .success());
+}
+#[test]
+fn home_lookup_is_lazy_with_userprofile_fallback() {
+    let s = Sandbox::new();
+    let run = |args: &[&str], envs: &[(&str, PathBuf)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_quota-lite"));
+        cmd.args(args)
+            .env_remove("HOME")
+            .env_remove("USERPROFILE")
+            .env_remove("APPDATA")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .stdin(std::process::Stdio::null());
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        cmd.output().unwrap()
+    };
+    let overrides = [
+        ("XDG_CONFIG_HOME", s.0.join("config")),
+        ("CLAUDE_CONFIG_DIR", s.0.join("claude")),
+    ];
+    assert!(run(&["budget", "set", "5", "--per", "day"], &overrides)
+        .status
+        .success());
+    assert!(run(&["--json"], &overrides).status.success());
+    assert!(!run(&["--json"], &[]).status.success());
+    let profile = [("USERPROFILE", s.0.clone())];
+    assert!(run(&["budget", "set", "5", "--per", "day"], &profile)
+        .status
+        .success());
+    assert!(s.0.join(".config/quota-lite/config.json").is_file());
+    fs::create_dir_all(s.0.join(".claude/projects/p")).unwrap();
+    fs::write(s.0.join(".claude/projects/p/s.jsonl"), "").unwrap();
+    let o = run(&["--json"], &profile);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(r["files_read"], 1);
 }

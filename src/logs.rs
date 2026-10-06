@@ -8,6 +8,7 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader},
     path::Path,
+    time::{Duration, UNIX_EPOCH},
 };
 #[derive(Clone, Debug)]
 pub struct Event {
@@ -91,7 +92,21 @@ fn event(v: &Value, project: &str, session: &str, c: &Config) -> Option<(String,
         },
     ))
 }
-fn scan_file(path: &Path, project: &str, session: &str, c: &Config, logs: &mut Logs) {
+struct Scan<'a> {
+    config: &'a Config,
+    since: i64,
+    logs: Logs,
+    messages: BTreeMap<String, Event>,
+}
+fn scan_file(path: &Path, project: &str, session: &str, scan: &mut Scan) {
+    let cutoff = UNIX_EPOCH + Duration::from_secs(scan.since.max(0) as u64);
+    if fs::metadata(path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t < cutoff)
+    {
+        return;
+    }
+    let (c, logs, messages) = (scan.config, &mut scan.logs, &mut scan.messages);
     let Ok(file) = File::open(path) else {
         logs.unreadable += 1;
         return;
@@ -99,7 +114,6 @@ fn scan_file(path: &Path, project: &str, session: &str, c: &Config, logs: &mut L
     logs.files += 1;
     let mut reader = BufReader::new(file);
     let mut bytes = Vec::new();
-    let mut messages: BTreeMap<String, Event> = BTreeMap::new();
     loop {
         bytes.clear();
         // Bound each line without ever retaining a whole large transcript line.
@@ -146,10 +160,9 @@ fn scan_file(path: &Path, project: &str, session: &str, c: &Config, logs: &mut L
             logs.skipped += 1;
         }
     }
-    logs.events.extend(messages.into_values());
 }
 fn entries(path: &Path, logs: &mut Logs) -> Vec<fs::DirEntry> {
-    match fs::read_dir(path) {
+    let mut list: Vec<_> = match fs::read_dir(path) {
         Ok(it) => it
             .filter_map(|e| match e {
                 Ok(e) => Some(e),
@@ -163,7 +176,9 @@ fn entries(path: &Path, logs: &mut Logs) -> Vec<fs::DirEntry> {
             logs.unreadable += 1;
             Vec::new()
         }
-    }
+    };
+    list.sort_by_key(|e| e.file_name());
+    list
 }
 fn regular(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
@@ -171,21 +186,30 @@ fn regular(path: &Path) -> bool {
 fn directory(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
 }
-pub fn read(root: &Path, c: &Config) -> Logs {
-    let mut logs = Logs::default();
-    if !root.exists() {
-        return logs;
+pub fn read(root: &Path, c: &Config, since: i64) -> Logs {
+    let mut scan = Scan {
+        config: c,
+        since,
+        logs: Logs::default(),
+        messages: BTreeMap::new(),
+    };
+    if root.exists() {
+        walk(root, &mut scan);
     }
+    scan.logs.events = scan.messages.into_values().collect();
+    scan.logs
+}
+fn walk(root: &Path, scan: &mut Scan) {
     if !directory(root) {
-        logs.unreadable += 1;
-        return logs;
+        scan.logs.unreadable += 1;
+        return;
     }
-    for project in entries(root, &mut logs) {
+    for project in entries(root, &mut scan.logs) {
         if !directory(&project.path()) {
             continue;
         }
         let name = project.file_name().to_string_lossy().into_owned();
-        for entry in entries(&project.path(), &mut logs) {
+        for entry in entries(&project.path(), &mut scan.logs) {
             let path = entry.path();
             if path.extension().is_some_and(|x| x == "jsonl") && regular(&path) {
                 let session = path
@@ -193,12 +217,12 @@ pub fn read(root: &Path, c: &Config) -> Logs {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
-                scan_file(&path, &name, &session, c, &mut logs);
+                scan_file(&path, &name, &session, scan);
             } else if directory(&path) {
                 // Claude Code layout: projects/<project>/<session>/subagents/*.jsonl.
                 let sub = path.join("subagents");
                 if directory(&sub) {
-                    for agent in entries(&sub, &mut logs) {
+                    for agent in entries(&sub, &mut scan.logs) {
                         let p = agent.path();
                         if p.extension().is_some_and(|x| x == "jsonl") && regular(&p) {
                             let session = format!(
@@ -206,14 +230,13 @@ pub fn read(root: &Path, c: &Config) -> Logs {
                                 entry.file_name().to_string_lossy(),
                                 p.file_stem().unwrap_or_default().to_string_lossy()
                             );
-                            scan_file(&p, &name, &session, c, &mut logs);
+                            scan_file(&p, &name, &session, scan);
                         }
                     }
                 }
             }
         }
     }
-    logs
 }
 #[cfg(test)]
 mod tests {

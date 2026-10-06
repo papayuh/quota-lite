@@ -92,8 +92,7 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
     } else {
         Some(events.iter().map(|e| value(e, &b.unit)).sum::<f64>())
     };
-    let incomplete =
-        requests || (b.unit == "usd" && unknown > 0) || logs.skipped > 0 || logs.unreadable > 0;
+    let incomplete = requests || (b.unit == "usd" && unknown > 0);
     let (burn, hit) = if incomplete {
         (None, None)
     } else {
@@ -119,13 +118,13 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
     }
     let mut attention=vec!["Copilot premium requests, multipliers and costs are unmeasurable from supported local logs. No message-count proxy is used; requests budgets have unknown usage.".into(),"Local log coverage only; subscriptions, discounts, missing/deleted logs and vendor quotas are not measured.".into()];
     if logs.files == 0 {
-        attention.push("No Claude JSONL session logs found; observed totals do not establish zero actual usage.".into());
+        attention.push("No Claude JSONL session logs modified this period; observed totals do not establish zero actual usage.".into());
     }
     if unknown > 0 {
         attention.push(format!("{unknown} messages lack a known price; USD total is a lower bound. Set prices[model] in config, including cache_write_1h for one-hour cache overrides."));
     }
     if logs.skipped > 0 || logs.unreadable > 0 {
-        attention.push("Some log records/paths were skipped; coverage is incomplete and projection is suppressed.".into());
+        attention.push("Some log records/paths modified this period were skipped; remaining, burn and projection are partial-coverage estimates.".into());
     }
     Report {
         estimate: true,

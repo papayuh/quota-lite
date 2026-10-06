@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
-const HELP:&str="quota-lite: offline personal usage budgets (estimates, not vendor quotas)\n\nquota-lite budget set <amount> --per day|week|month [--unit usd|tokens|requests] [--json]\nquota-lite [--json]\nquota-lite report --by project|model|day [--json]\nquota-lite --tui [--once]\n\nUTC calendar periods: day, Monday-based week, calendar month.\nConfig: $XDG_CONFIG_HOME/quota-lite/config.json or ~/.config/quota-lite/config.json\nLogs: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects\nCopilot usage is unknown: local premium-request accounting is not standardized.\n--tui redraws every 30 seconds; Ctrl-C quits. --once draws one frame.\n";
+const HELP:&str="quota-lite: offline personal usage budgets (estimates, not vendor quotas)\n\nquota-lite budget set <amount> --per day|week|month [--unit usd|tokens|requests] [--json]\nquota-lite [--json]\nquota-lite report --by project|model|day [--json]\nquota-lite --tui [--once]\n\nUTC calendar periods: day, Monday-based week, calendar month.\nConfig: $XDG_CONFIG_HOME/quota-lite/config.json, %APPDATA% on Windows, or ~/.config/quota-lite/config.json\nLogs: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects (home: HOME, else USERPROFILE)\nCopilot usage is unknown: local premium-request accounting is not standardized.\n--tui redraws every 30 seconds; Ctrl-C quits. --once draws one frame.\n";
 #[derive(Debug)]
 struct Args {
     amount: Option<f64>,
@@ -182,18 +182,20 @@ fn run() -> Result<(), String> {
         c.budget = Some(prompt()?);
         c.save(&path)?;
     }
-    let root = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or(config::home()?.join(".claude"))
-        .join("projects");
+    let b = c.budget.as_ref().ok_or("no budget")?;
+    let root = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(p) => PathBuf::from(p),
+        None => config::home()?.join(".claude"),
+    }
+    .join("projects");
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "system clock predates 1970")?
             .as_secs() as i64;
         let r = report::build(
-            logs::read(&root, &c),
-            c.budget.as_ref().ok_or("no budget")?,
+            logs::read(&root, &c, date::window(now, &b.per).0),
+            b,
             &a.by,
             now,
         );

@@ -81,13 +81,17 @@ impl Config {
 }
 pub fn home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .ok_or("HOME is not set".into())
+        .ok_or("HOME (or USERPROFILE) is not set".into())
 }
 pub fn path() -> Result<PathBuf, String> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or(home()?.join(".config"));
+    let base = match std::env::var_os("XDG_CONFIG_HOME")
+        .or_else(|| std::env::var_os("APPDATA").filter(|_| cfg!(windows)))
+    {
+        Some(p) => PathBuf::from(p),
+        None => home()?.join(".config"),
+    };
     Ok(base.join("quota-lite/config.json"))
 }
 // Public Anthropic list prices, checked 2026-10-06 (legacy 3.x snapshot 2025-05-22).

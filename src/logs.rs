@@ -28,8 +28,17 @@ pub struct Logs {
 fn number(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_u64).map(|n| n as f64)
 }
+fn billable(v: &Value) -> bool {
+    v.get("type").and_then(Value::as_str) == Some("assistant")
+        && v.pointer("/message/model")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.starts_with("claude-"))
+        && v.pointer("/message/role")
+            .and_then(Value::as_str)
+            .is_none_or(|role| role == "assistant")
+}
 fn event(v: &Value, project: &str, session: &str, c: &Config) -> Option<(String, Event)> {
-    if v.get("type")?.as_str()? != "assistant" {
+    if !billable(v) {
         return None;
     }
     let m = v.get("message")?;
@@ -50,20 +59,25 @@ fn event(v: &Value, project: &str, session: &str, c: &Config) -> Option<(String,
     };
     let time = date::parse(v.get("timestamp")?.as_str()?)?;
     let p = price(model, c);
-    // One-hour cache creation requires explicit premium pricing; do not silently
-    // price it at the five-minute rate unless the user supplied an override.
+    // Cache TTL counts are subdivisions of total cache creation, not extra tokens.
     let hour = match u.pointer("/cache_creation/ephemeral_1h_input_tokens") {
         Some(n) => n.as_u64()?,
         None => 0,
     };
-    let usd = if hour > 0 && !c.prices.contains_key(model) {
-        None
-    } else {
-        p.map(|p| {
-            (input * p.input + output * p.output + read * p.cache_read + write * p.cache_write)
-                / 1e6
-        })
-    };
+    if hour as f64 > write {
+        return None;
+    }
+    let usd = p.and_then(|p| {
+        let hour_rate = if hour > 0 { p.cache_write_1h? } else { 0.0 };
+        Some(
+            (input * p.input
+                + output * p.output
+                + read * p.cache_read
+                + (write - hour as f64) * p.cache_write
+                + hour as f64 * hour_rate)
+                / 1e6,
+        )
+    });
     let usd = usd.filter(|n| n.is_finite());
     Some((
         id.into(),
@@ -128,9 +142,7 @@ fn scan_file(path: &Path, project: &str, session: &str, c: &Config, logs: &mut L
         if let Some((id, e)) = event(&v, project, session, c) {
             // Streaming assistant snapshots repeat message.id; latest usage wins.
             messages.insert(id, e);
-        } else if v.get("type").and_then(Value::as_str) == Some("assistant")
-            && v.pointer("/message/usage").is_some()
-        {
+        } else if billable(&v) && v.pointer("/message/usage").is_some() {
             logs.skipped += 1;
         }
     }
@@ -214,7 +226,7 @@ mod tests {
         assert_eq!(e.tokens, 1800.0);
         assert!((e.usd.unwrap() - 0.00756).abs() < 1e-10);
         let mut unknown = v.clone();
-        unknown["message"]["model"] = Value::String("new-model".into());
+        unknown["message"]["model"] = Value::String("claude-new-model".into());
         assert!(event(&unknown, "p", "s", &Config::default())
             .unwrap()
             .1
@@ -225,11 +237,16 @@ mod tests {
         let mut hour = v.clone();
         hour["message"]["usage"]["cache_creation"] =
             serde_json::json!({"ephemeral_1h_input_tokens":400});
-        assert!(event(&hour, "p", "s", &Config::default())
-            .unwrap()
-            .1
-            .usd
-            .is_none());
+        assert!(
+            (event(&hour, "p", "s", &Config::default())
+                .unwrap()
+                .1
+                .usd
+                .unwrap()
+                - 0.00846)
+                .abs()
+                < 1e-10
+        );
         let mut c = Config::default();
         c.prices.insert(
             "claude-sonnet-4-20250514".into(),
@@ -237,7 +254,8 @@ mod tests {
                 input: 3.0,
                 output: 15.0,
                 cache_read: 0.3,
-                cache_write: 6.0,
+                cache_write: 3.75,
+                cache_write_1h: Some(6.0),
             },
         );
         assert!((event(&hour, "p", "s", &c).unwrap().1.usd.unwrap() - 0.00846).abs() < 1e-10);

@@ -72,6 +72,15 @@ fn e2e_dedup_unknown_prices_and_units() {
     let r = s.json(&["report", "--by", "model", "--json"]);
     assert_eq!(r["messages"], 2);
     assert_eq!(r["unpriced_messages"], 1);
+    assert_eq!(r["unpriced_models"][0]["name"], "claude-future-model");
+    assert!(String::from_utf8(s.run(&[]).stdout)
+        .unwrap()
+        .contains("claude-future-model"));
+    assert!(r["attention"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("Set prices[model]")));
     assert!((r["observed_spent"].as_f64().unwrap() - 0.00756).abs() < 1e-10);
     assert!(r["remaining"].is_null());
     assert!(r["projected_budget_hit"].is_null());
@@ -119,6 +128,30 @@ fn overrides_malformed_and_subagents() {
     c["prices"]["claude-sonnet-4-20250514"]["input"] = Value::from(-1);
     fs::write(path, serde_json::to_vec(&c).unwrap()).unwrap();
     assert!(!s.run(&["--json"]).status.success());
+}
+#[test]
+fn mixed_cache_and_non_api_entries() {
+    let s = Sandbox::new();
+    s.logs(include_str!("fixtures/mixed-cache.jsonl"));
+    assert!(s
+        .run(&["budget", "set", "10", "--per", "day"])
+        .status
+        .success());
+    let r = s.json(&["--json"]);
+    assert_eq!(r["messages"], 1);
+    assert_eq!(r["unpriced_messages"], 0);
+    assert_eq!(r["skipped_lines"], 0);
+    assert!((r["observed_spent"].as_f64().unwrap() - 0.00801).abs() < 1e-10);
+    // An old four-rate override cannot silently assign 5m rates to 1h writes.
+    let path = s.0.join("config/quota-lite/config.json");
+    let mut c: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    c["prices"]["claude-sonnet-4-20250514"] =
+        serde_json::json!({"input":3,"output":15,"cache_read":0.3,"cache_write":3.75});
+    fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+    assert_eq!(s.json(&["--json"])["unpriced_messages"], 1);
+    c["prices"]["claude-sonnet-4-20250514"]["cache_write_1h"] = Value::from(6);
+    fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+    assert_eq!(s.json(&["--json"])["unpriced_messages"], 0);
 }
 #[cfg(unix)]
 #[test]

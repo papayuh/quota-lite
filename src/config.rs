@@ -10,6 +10,8 @@ pub struct Price {
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    #[serde(default)]
+    pub cache_write_1h: Option<f64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Budget {
@@ -40,6 +42,7 @@ impl Config {
         for p in self.prices.values() {
             if [p.input, p.output, p.cache_read, p.cache_write]
                 .iter()
+                .chain(p.cache_write_1h.iter())
                 .any(|n| !n.is_finite() || *n < 0.0)
             {
                 return Err("prices must be finite nonnegative USD per million tokens".into());
@@ -89,38 +92,32 @@ pub fn path() -> Result<PathBuf, String> {
 }
 // Public Anthropic list prices, checked 2026-10-06 (legacy 3.x snapshot 2025-05-22).
 // USD per million tokens;
-// cache writes use the five-minute rate. Exact known ids only, never guess new models.
+// Both five-minute and one-hour cache-write rates. Known families support dated
+// snapshots; do not match arbitrary suffixes or unknown future families.
 pub fn price(model: &str, c: &Config) -> Option<Price> {
     if let Some(p) = c.prices.get(model) {
         return Some(p.clone());
     }
-    let (i, o, read_multiplier) = match model {
+    let family = model
+        .rsplit_once('-')
+        .filter(|(_, suffix)| suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_digit()))
+        .map(|(family, _)| family)
+        .unwrap_or(model);
+    let (i, o, read_multiplier) = match family {
         "claude-opus-5-5" => (4.0, 20.0, 0.05),
         "claude-sonnet-5-5" | "claude-sonnet-5" => (2.0, 10.0, 0.1),
         "claude-fable-5-1" | "claude-mythos-5-1" => (10.0, 50.0, 0.025),
         "claude-fable-5" | "claude-mythos-5" => (10.0, 50.0, 0.1),
-        "claude-opus-5"
-        | "claude-opus-4-8"
-        | "claude-opus-4-7"
-        | "claude-opus-4-6"
-        | "claude-opus-4-5"
-        | "claude-opus-4-5-20251101" => (5.0, 25.0, 0.1),
-        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => (1.0, 5.0, 0.1),
-        "claude-sonnet-4-6"
-        | "claude-sonnet-4-5"
-        | "claude-sonnet-4-5-20250929"
-        | "claude-sonnet-4-20250514"
-        | "claude-sonnet-4-0"
-        | "claude-3-7-sonnet-20250219"
-        | "claude-3-5-sonnet-20241022"
-        | "claude-3-5-sonnet-20240620" => (3.0, 15.0, 0.1),
-        "claude-opus-4-1"
-        | "claude-opus-4-1-20250805"
-        | "claude-opus-4-20250514"
-        | "claude-opus-4-0"
-        | "claude-3-opus-20240229" => (15.0, 75.0, 0.1),
-        "claude-3-5-haiku-20241022" => (0.8, 4.0, 0.1),
-        "claude-3-haiku-20240307" => (0.25, 1.25, 0.1),
+        "claude-opus-5" | "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6"
+        | "claude-opus-4-5" => (5.0, 25.0, 0.1),
+        "claude-haiku-4-5" => (1.0, 5.0, 0.1),
+        "claude-sonnet-4-6" | "claude-sonnet-4-5" | "claude-sonnet-4" | "claude-sonnet-4-0"
+        | "claude-3-7-sonnet" | "claude-3-5-sonnet" => (3.0, 15.0, 0.1),
+        "claude-opus-4-1" | "claude-opus-4" | "claude-opus-4-0" | "claude-3-opus" => {
+            (15.0, 75.0, 0.1)
+        }
+        "claude-3-5-haiku" => (0.8, 4.0, 0.1),
+        "claude-3-haiku" => (0.25, 1.25, 0.1),
         _ => return None,
     };
     Some(Price {
@@ -128,6 +125,7 @@ pub fn price(model: &str, c: &Config) -> Option<Price> {
         output: o,
         cache_read: i * read_multiplier,
         cache_write: i * 1.25,
+        cache_write_1h: Some(i * 2.0),
     })
 }
 
@@ -145,5 +143,9 @@ mod tests {
         assert_eq!(price("claude-opus-5-5", &c).unwrap().cache_read, 0.2);
         assert_eq!(price("claude-fable-5-1", &c).unwrap().cache_read, 0.25);
         assert!(price("claude-opus-future", &c).is_none());
+        assert_eq!(price("claude-opus-5-5-20261001", &c).unwrap().input, 4.0);
+        assert_eq!(price("claude-sonnet-4-20250514", &c).unwrap().input, 3.0);
+        assert!(price("claude-opus-5-5-unknown", &c).is_none());
+        assert_eq!(opus.cache_write_1h, Some(10.0));
     }
 }

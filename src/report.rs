@@ -32,6 +32,7 @@ pub struct Report {
     pub skipped_lines: usize,
     pub unreadable_paths: usize,
     pub breakdown: Vec<Row>,
+    pub unpriced_models: Vec<Row>,
     pub expensive_sessions: Vec<Row>,
     pub tips: Vec<String>,
     pub attention: Vec<String>,
@@ -121,7 +122,7 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
         attention.push("No Claude JSONL session logs found; observed totals do not establish zero actual usage.".into());
     }
     if unknown > 0 {
-        attention.push(format!("{unknown} messages lack a known price (or use one-hour cache writes); USD total is a lower bound. Add exact model overrides."));
+        attention.push(format!("{unknown} messages lack a known price; USD total is a lower bound. Set prices[model] in config, including cache_write_1h for one-hour cache overrides."));
     }
     if logs.skipped > 0 || logs.unreadable > 0 {
         attention.push("Some log records/paths were skipped; coverage is incomplete and projection is suppressed.".into());
@@ -153,6 +154,15 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
         } else {
             group(&events, &b.unit, by)
         },
+        unpriced_models: group(
+            &events
+                .iter()
+                .copied()
+                .filter(|e| e.usd.is_none())
+                .collect::<Vec<_>>(),
+            "usd",
+            "model",
+        ),
         expensive_sessions: sessions,
         tips,
         attention,
@@ -164,6 +174,7 @@ pub fn text(r: &Report) -> String {
     for (label, rows) in [
         ("breakdown", &r.breakdown),
         ("expensiveSessions", &r.expensive_sessions),
+        ("unpricedModels", &r.unpriced_models),
     ] {
         s.push_str(&format!(
             "{label}[{}]{{name,observed,messages,unpriced}}:\n",
@@ -186,7 +197,10 @@ pub fn text(r: &Report) -> String {
         ));
     }
     for warning in &r.attention {
-        s.push_str(&format!("attention: {warning}\n"));
+        s.push_str(&format!(
+            "attention: {}\n",
+            serde_json::to_string(warning).unwrap_or_default()
+        ));
     }
     s
 }

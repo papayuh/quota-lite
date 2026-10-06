@@ -99,6 +99,8 @@ Exit status: 0 success, 2 invalid arguments/config or IO failure.
 Config lives in `$XDG_CONFIG_HOME/quota-lite/config.json` or
 `~/.config/quota-lite/config.json`. `budget set` preserves pricing overrides.
 Logs come from `$CLAUDE_CONFIG_DIR/projects` or `~/.claude/projects`.
+Only Claude API assistant entries (model ids starting `claude-`) count as usage;
+synthetic, missing-model, non-Claude, user and tool records are excluded.
 Only `projects/<project>/*.jsonl` and
 `projects/<project>/<session>/subagents/*.jsonl` are supported.
 Project labels are Claude's directory names, not decoded filesystem paths.
@@ -128,7 +130,7 @@ Built-in public Anthropic list prices checked **2026-10-06**, USD per million
 tokens. Source: https://platform.claude.com/docs/en/about-claude/pricing .
 Legacy 3.x rates retain the 2025-05-22 snapshot. Prices never auto-update.
 
-| Models (exact ids in `src/config.rs`) | Input | Output | Cache read | Cache write (5 min) |
+| Model families (`src/config.rs`; [official source](https://platform.claude.com/docs/en/about-claude/pricing), checked 2026-10-06; legacy 3.x snapshot 2025-05-22) | Input | Output | Cache read | Cache write (5 min) |
 |---|---:|---:|---:|---:|
 | Opus 5.5 | 4 | 20 | 0.20 | 5 |
 | Sonnet 5.5, 5 | 2 | 10 | 0.20 | 2.50 |
@@ -141,11 +143,19 @@ Legacy 3.x rates retain the 2025-05-22 snapshot. Prices never auto-update.
 | Haiku 3.5 | 0.80 | 4 | 0.08 | 1 |
 | Haiku 3 | 0.25 | 1.25 | 0.025 | 0.3125 |
 
-Unknown models are **unpriced**, not silently assigned a default. One-hour cache
-writes are unpriced unless an exact override is supplied. Subscription seats,
+Known model families match aliases and `-YYYYMMDD` snapshots; arbitrary suffixes
+and unknown future families never inherit a price. Exact config overrides win.
+One-hour cache writes cost **2 × input price** per million tokens (official table,
+checked 2026-10-06), while five-minute writes cost 1.25 × input price. Nested TTL
+counts partition the total cache-creation tokens; they are not added again.
+Unknown models are **unpriced**, not silently assigned a default. Both summary
+and JSON list `unpricedModels`/`unpriced_models` with counts and an override hint.
+Subscription seats,
 long-context/fast-mode/residency premiums, batch discounts, taxes, currencies other than USD, and
 real billing invoices are not modeled. Override all rates for any such workload;
-use a blended cache-write rate if the log mixes cache TTLs. Estimates are not
+set `cache_write_1h` as well as the five-minute `cache_write` for mixed cache TTLs.
+Older overrides without `cache_write_1h` still work for five-minute writes but
+are unpriced for one-hour writes. Estimates are not
 actual charges, especially on unlimited or subscription plans.
 
 Example config (rate fields are required; nonnegative finite numbers only):
@@ -155,7 +165,8 @@ Example config (rate fields are required; nonnegative finite numbers only):
   "budget": { "amount": 25, "per": "day", "unit": "usd" },
   "prices": {
     "your-exact-model-id": {
-      "input": 1.5, "output": 7.5, "cache_read": 0.15, "cache_write": 1.875
+      "input": 1.5, "output": 7.5, "cache_read": 0.15, "cache_write": 1.875,
+      "cache_write_1h": 3
     }
   }
 }
@@ -183,7 +194,8 @@ cargo test --locked --offline
 ```
 
 Synthetic fixtures only: parser/schema validation, pricing, unknown models,
-streaming deduplication, subagents, config overrides, CLI flags, requests-unknown
+streaming deduplication, non-API exclusions, mixed cache TTLs, dated model-family
+matching, subagents, config overrides, CLI flags, requests-unknown
 behavior, noninteractive setup, leap years, UTC offsets, calendar windows, burn
 projection and symlink refusal. End-to-end tests invoke the compiled binary in
 isolated directories under `target/`, never real user logs.

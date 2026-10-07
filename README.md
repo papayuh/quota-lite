@@ -6,6 +6,45 @@ budget headroom, burn rate, projected exhaustion, project/model/day breakdowns,
 and the five most expensive sessions. Works offline. No proxy, routing, login,
 credential refresh, telemetry, or runtime network dependencies.
 
+## Quickstart
+
+Install from source with Rust 1.85+ (`cargo install --path . --locked`), or use a
+prebuilt binary from [GitHub Releases](https://github.com/papayuh/quota-lite/releases)
+once a version tag has been released. Then:
+
+```sh
+quota-lite budget set 25 --per day
+quota-lite
+quota-lite report --by model --json
+```
+
+Example text report (synthetic usage, at noon UTC on 2026-10-06):
+
+```text
+estimate: true (list prices 2026-10-06, UTC calendar windows)
+budget: 25 usd / day
+window: 2026-10-06 .. 2026-10-07 (exclusive)
+observed: 10.0000 | remaining: 15.0000 | burn/day: 20.0000
+projectedHit: 2026-10-07 | withinWindow: false
+coverage: 1 files, 12 messages, 0 unpriced, 0 skipped, 0 unreadable
+breakdown[1]{name,observed,messages,unpriced}:
+  "synthetic-project",10.0000,12,0
+expensiveSessions[1]{name,observed,messages,unpriced}:
+  "synthetic-project/session",10.0000,12,0
+unpricedModels[0]{name,observed,messages,unpriced}:
+tip: "claude-sonnet-4 accounts for 100.0% of priced spend; consider a lower-priced model for routine tasks."
+attention: "Copilot premium requests, multipliers and costs are unmeasurable from supported local logs. No message-count proxy is used; requests budgets have unknown usage."
+attention: "Local log coverage only; subscriptions, discounts, missing/deleted logs and vendor quotas are not measured."
+```
+
+## How it differs from ccusage
+
+[ccusage](https://github.com/ryoppippi/ccusage) focuses on Claude Code usage and
+cost reports. quota-lite centers the report on **your budget**: remaining
+headroom, observed burn rate, and projected budget exhaustion. It runs fully
+offline with just two direct Rust dependencies (`serde` and `serde_json`). It
+does not query vendor quota balances or replace a billing statement.
+
 **Copilot is currently unmeasurable.** VS Code and Copilot CLI local logs do not
 provide a stable, complete premium-request accounting interface. This version
 does not guess billed requests from chat messages or read Copilot credential
@@ -14,13 +53,39 @@ Claude logs alone cannot establish your combined Claude + Copilot spending.
 
 ## Install
 
+### Prebuilt binaries
+
+Version tags (`v<version>`, matching `Cargo.toml`) trigger builds for Linux x86-64,
+macOS Apple Silicon and Intel, and Windows x86-64. The release attaches `.tar.gz`
+archives (Linux/macOS), a `.zip` (Windows), and a `.sha256` sidecar for each.
+Download the matching archive and checksum from
+[Releases](https://github.com/papayuh/quota-lite/releases). Verify before extracting:
+
+```sh
+# Linux, in the download directory:
+sha256sum --check quota-lite-v<VERSION>-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS: shasum -a 256 -c <archive>.sha256
+# Windows PowerShell: Get-FileHash <archive>.zip -Algorithm SHA256
+# Compare the Windows hash with the downloaded .sha256 file.
+```
+
+Extract and copy `quota-lite` (Windows: `quota-lite.exe`) to a directory on your
+PATH. Linux binaries require glibc 2.35+; older systems can build from source.
+Checksums detect corruption; they are not signatures from an independent source.
+
+### From source
+
 Rust 1.85+ and Cargo are required. From this repository:
 
 ```sh
-cargo build --release --locked
-# Copy target/release/quota-lite to a directory on your PATH.
+cargo install --path . --locked
 cargo test --locked
 ```
+
+The package metadata is prepared for crates.io, but this change **does not
+publish** it. `cargo install quota-lite --locked` becomes available only after
+an authorized maintainer publishes with a crates.io token. Source installs and
+tag-triggered GitHub binaries do not require that token.
 
 There are exactly two direct dependencies: `serde` (typed config/report encoding)
 and `serde_json` (JSON/JSONL parsing). No clap, chrono, async runtime, HTTP client,
@@ -29,52 +94,6 @@ calendar arithmetic, file IO and terminal refresh. `Cargo.lock` pins all package
 The locked transitive packages are `serde_core`, `serde_derive`, `proc-macro2`,
 `quote`, `syn`, `unicode-ident` (derive macros), and `itoa`, `memchr`, `zmij`
 (JSON encoding/parsing internals). Review the lockfile when upgrading.
-
-### Fully offline build
-
-On a connected preparation machine using this exact lockfile:
-
-```sh
-cargo vendor --locked vendor > vendor-config.toml
-```
-
-Transfer the source, `Cargo.lock`, and `vendor/` to the offline machine. Create
-`.cargo/config.toml` in the repository (these machine-specific files are ignored):
-
-```toml
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-
-[net]
-offline = true
-```
-
-Then `cargo build --release --locked --offline` and
-`cargo test --locked --offline`. No Cargo download is needed. Vendoring is a
-build preparation step; references such as shunt are never vendored.
-
-### Internal registry mirror
-
-Instead of vendoring, create `.cargo/config.toml` using your approved registry URL:
-
-```toml
-[source.crates-io]
-replace-with = "internal"
-
-[source.internal]
-registry = "sparse+https://artifactory.example.invalid/api/cargo/approved/index/"
-```
-
-The trailing `/` matters. Use your organization's normal Cargo credential
-provider; do not put tokens in this repository. Populate Cargo's cache from the
-mirror, then build/test with `--locked --offline`. Cargo may use the network
-while preparing dependencies; **the built quota-lite binary never does**.
-A mirror must contain the pinned versions (including transitives). Dependencies
-are not dynamically replaced: changes to allowed versions require updating and
-reviewing `Cargo.lock` before transfer.
 
 ## Usage
 
@@ -116,8 +135,10 @@ past periods or future-dated messages. Total tokens include input, output,
 cache-read and cache-creation tokens. Assistant message ids deduplicate across
 all log files, covering streaming snapshots and history copied by resumed
 sessions (latest snapshot wins; files are read in name order). Log files not
-modified since the period started are not read, since logs are append-only.
-Synthetic tests cover this behavior.
+modified since the period started are excluded from usage accounting, since logs
+are append-only. Retained files are still scanned for timestamps to establish
+the oldest available transcript, including non-usage records. This can make
+reports slower for large retained histories. Synthetic tests cover this behavior.
 
 Burn is observed usage divided by elapsed time since the period started.
 Projected hit date assumes that rate continues; it is UTC, date-only, and can
@@ -126,7 +147,13 @@ budgets show today, not a claimed historical crossing date. Zero usage, zero
 elapsed time, or unknown prices in USD mode suppress projections. Malformed
 lines or unreadable paths in files modified this period are counted and flagged
 in `attention`; remaining, burn and projection are still shown as
-partial-coverage estimates. Missing historical logs bias burn downwards. No projection
+partial-coverage estimates. Claude Code deletes old transcripts according to
+`cleanupPeriodDays` (30 days by default; admins may set it lower). If the window
+starts before the oldest retained transcript timestamp, `attention` says totals
+and burn rate are **lower bounds**; remaining and projection may be optimistic.
+This is a coverage warning, not proof of deletion: a new installation can also
+have short history, and gaps after the oldest transcript cannot be detected.
+No logs still gets the separate no-usage-evidence warning. No projection
 is a vendor prediction or a promise. `observed_spent` is a **lower bound** when
 prices are missing, with remaining/projection unknown. `attention` explicitly
 reports incomplete evidence. No logs means zero *observed*, not zero actual.
@@ -136,6 +163,8 @@ reports incomplete evidence. No logs means zero *observed*, not zero actual.
 Built-in public Anthropic list prices checked **2026-10-06**, USD per million
 tokens. Source: https://platform.claude.com/docs/en/about-claude/pricing .
 Legacy 3.x rates retain the 2025-05-22 snapshot. Prices never auto-update.
+Once the built-in table's checked date is more than 90 days old, `attention`
+warns that rates may be stale. Review current prices and add exact-model overrides.
 
 | Model families (`src/config.rs`; [official source](https://platform.claude.com/docs/en/about-claude/pricing), checked 2026-10-06; legacy 3.x snapshot 2025-05-22) | Input | Output | Cache read | Cache write (5 min) |
 |---|---:|---:|---:|---:|
@@ -206,6 +235,54 @@ matching, subagents, config overrides, CLI flags, requests-unknown
 behavior, noninteractive setup, leap years, UTC offsets, calendar windows, burn
 projection and symlink refusal. End-to-end tests invoke the compiled binary in
 isolated directories under `target/`, never real user logs.
+
+## Offline build preparation
+
+### Vendoring
+
+On a connected preparation machine using this exact lockfile:
+
+```sh
+cargo vendor --locked vendor > vendor-config.toml
+```
+
+Transfer the source, `Cargo.lock`, and `vendor/` to the offline machine. Create
+`.cargo/config.toml` in the repository (these machine-specific files are ignored):
+
+```toml
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[net]
+offline = true
+```
+
+Then `cargo build --release --locked --offline` and
+`cargo test --locked --offline`. No Cargo download is needed. Vendoring is a
+build preparation step; references such as shunt are never vendored.
+
+### Internal registry mirror
+
+Instead of vendoring, create `.cargo/config.toml` using your approved registry URL:
+
+```toml
+[source.crates-io]
+replace-with = "internal"
+
+[source.internal]
+registry = "sparse+https://artifactory.example.invalid/api/cargo/approved/index/"
+```
+
+The trailing `/` matters. Use your organization's normal Cargo credential
+provider; do not put tokens in this repository. Populate Cargo's cache from the
+mirror, then build/test with `--locked --offline`. Cargo may use the network
+while preparing dependencies; **the built quota-lite binary never does**.
+A mirror must contain the pinned versions (including transitives). Dependencies
+are not dynamically replaced: changes to allowed versions require updating and
+reviewing `Cargo.lock` before transfer.
 
 ## Inspiration and license
 

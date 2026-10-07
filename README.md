@@ -99,9 +99,8 @@ all log files, covering streaming snapshots and history copied by resumed
 sessions (latest snapshot wins; files are read in name order).
 
 Log files not modified since the period started are excluded from usage
-accounting, since logs are append-only. Retained files are still scanned for
-timestamps to establish the oldest available transcript, including non-usage
-records. This can make reports slower for large retained histories.
+accounting, since logs are append-only. Their modification times still mark the
+oldest retained transcript.
 
 Burn is observed usage divided by elapsed time since the period started.
 Projected hit date assumes that rate continues; it is UTC, date-only, and can
@@ -113,8 +112,10 @@ Malformed lines or unreadable paths in files modified this period are counted
 and flagged in `attention`; remaining, burn and projection are still shown as
 partial-coverage estimates. Claude Code deletes old transcripts according to
 `cleanupPeriodDays` (30 days by default; admins may set it lower). If the window
-starts before the oldest retained transcript timestamp, `attention` says totals
-and burn rate are **lower bounds**; remaining and projection may be optimistic.
+starts before the oldest retained transcript's modification time (cleanup
+deletes by modification time, so copied history in resumed sessions does not
+count), `attention` says totals and burn rate are **lower bounds**; remaining
+and projection may be optimistic.
 This is a coverage warning, not proof of deletion: a new installation can also
 have short history, and gaps after the oldest transcript cannot be detected.
 
@@ -140,7 +141,7 @@ warns that rates may be stale. Review current prices and add exact-model overrid
 | Haiku 4.5 | 1 | 5 | 0.10 | 1.25 |
 | Sonnet 4.6, 4.5, 4, 3.7, 3.5 | 3 | 15 | 0.30 | 3.75 |
 | Opus 4.1, 4, Opus 3 | 15 | 75 | 1.50 | 18.75 |
-| Haiku 3.5 | 0.80 | 4 | 0.08 | 1.25 |
+| Haiku 3.5 | 0.80 | 4 | 0.08 | 1 |
 | Haiku 3 | 0.25 | 1.25 | 0.025 | 0.3125 |
 
 Known model families match aliases and `-YYYYMMDD` snapshots; arbitrary suffixes

@@ -328,7 +328,7 @@ class Event:
 @dataclass
 class Logs:
     events: list = field(default_factory=list)
-    oldest_timestamp: Optional[int] = None
+    oldest_mtime: Optional[float] = None
     files: int = 0
     skipped: int = 0
     unreadable: int = 0
@@ -409,12 +409,16 @@ def read_logs(root, config, since):
 
     def scan_file(path, project, session):
         try:
-            active = path.stat().st_mtime >= max(since, 0)
+            mtime = path.stat().st_mtime
         except OSError:
-            active = True
+            mtime = None
+        if mtime is not None:
+            logs.oldest_mtime = mtime if logs.oldest_mtime is None else min(logs.oldest_mtime, mtime)
+            if mtime < max(since, 0):
+                return
         try:
             with path.open("rb") as source:
-                logs.files += int(active)
+                logs.files += 1
                 while True:
                     line = source.readline(MAX_LINE + 1)
                     if not line:
@@ -424,19 +428,12 @@ def read_logs(root, config, since):
                             line = source.readline(MAX_LINE + 1)
                             if not line:
                                 break
-                        logs.skipped += int(active)
+                        logs.skipped += 1
                         continue
                     try:
                         record = decode_json(line)
                     except (ValueError, UnicodeError, RecursionError):
-                        logs.skipped += int(active)
-                        continue
-                    if isinstance(record, dict):
-                        stamp = parse_date(record.get("timestamp"))
-                        if stamp is not None:
-                            old = logs.oldest_timestamp
-                            logs.oldest_timestamp = stamp if old is None else min(old, stamp)
-                    if not active:
+                        logs.skipped += 1
                         continue
                     parsed = event(record, project, session, config)
                     if parsed is not None:
@@ -446,7 +443,7 @@ def read_logs(root, config, since):
                     elif billable(record) and "usage" in record["message"]:
                         logs.skipped += 1
         except OSError:
-            logs.unreadable += int(active)
+            logs.unreadable += 1
 
     if root.exists():
         if not directory(root):
@@ -532,7 +529,7 @@ def build_report(logs, budget, by, now):
         top = max(models, key=lambda row: (row["observed"], row["name"]))
         tips.append(f"{top['name']} accounts for {top['observed'] / total * 100.0:.1f}% of priced spend; {MODEL_TIP}")
     attention = [COPILOT_WARNING, COVERAGE_WARNING]
-    if logs.oldest_timestamp is not None and start < logs.oldest_timestamp:
+    if logs.oldest_mtime is not None and start < logs.oldest_mtime:
         attention.append(RETENTION_WARNING)
     if now - parse_date(f"{PRICING_DATE}T00:00:00Z") > 90 * 86400:
         attention.append(STALE_PRICING_WARNING)

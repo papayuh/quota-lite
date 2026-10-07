@@ -184,14 +184,20 @@ class Sandbox(unittest.TestCase):
             self.assertEqual(self.cli("budget", "set", "5", "--per", "day", env=appdata).returncode, 0)
             self.assertTrue((self.root / "appdata/quota-lite/config.json").is_file())
 
-    def test_oldest_timestamp_includes_inactive_nonbillable_records(self):
+    def test_retention_uses_file_mtime_not_copied_history_timestamps(self):
+        budget = q.Budget(25, "month", "usd")
+        start, _ = q.window(NOW, budget.per)
+        resumed = self.project / "resumed.jsonl"
+        resumed.write_text('{"timestamp":"2026-08-01T00:00:00Z","type":"user"}\n', encoding="utf-8")
+        os.utime(resumed, (start + 86400, start + 86400))
+        logs = q.read_logs(self.project.parent, q.Config(), start)
+        self.assertIn(q.RETENTION_WARNING, q.build_report(logs, budget, "project", NOW)["attention"])
         old = self.project / "old.jsonl"
-        old.write_text('{"timestamp":"2024-01-01T00:00:00Z","type":"user"}\n', encoding="utf-8")
-        os.utime(old, (86400, 86400))
-        logs = q.read_logs(self.project.parent, q.Config(), q.parse_date("2024-02-01T00:00:00Z"))
-        self.assertEqual(logs.oldest_timestamp, q.parse_date("2024-01-01T00:00:00Z"))
-        self.assertEqual(logs.files, 0)
-        self.assertEqual(logs.events, [])
+        old.write_bytes(b"not json\n")
+        os.utime(old, (start - 1, start - 1))
+        logs = q.read_logs(self.project.parent, q.Config(), start)
+        self.assertNotIn(q.RETENTION_WARNING, q.build_report(logs, budget, "project", NOW)["attention"])
+        self.assertEqual((logs.files, logs.skipped, logs.events), (1, 0, []))
 
     def test_oversized_invalid_utf8_and_malformed_records(self):
         self.set_budget()
@@ -270,7 +276,7 @@ class CalendarAndPricingTests(unittest.TestCase):
         budget = q.Budget(25, "month", "usd")
         start, _ = q.window(NOW, budget.per)
         for oldest, expected in ((None, False), (start - 1, False), (start, False), (start + 1, True)):
-            report = q.build_report(q.Logs(oldest_timestamp=oldest), budget, "project", NOW)
+            report = q.build_report(q.Logs(oldest_mtime=oldest), budget, "project", NOW)
             self.assertEqual(q.RETENTION_WARNING in report["attention"], expected)
         checked = q.parse_date(q.PRICING_DATE + "T00:00:00Z")
         for age, expected in ((90 * 86400, False), (90 * 86400 + 1, True)):
@@ -281,7 +287,7 @@ class CalendarAndPricingTests(unittest.TestCase):
         start, end = q.window(NOW, "day")
         events = [q.Event(start, "p", str(i), "m", i * 10, float(i)) for i in range(1, 7)]
         events += [q.Event(t, "excluded", "s", "m", 999, 999) for t in (start - 1, end, NOW + 1)]
-        logs = q.Logs(events=events, oldest_timestamp=start)
+        logs = q.Logs(events=events, oldest_mtime=start)
         for by, expected in (("project", "p"), ("model", "m"), ("day", q.label(NOW))):
             report = q.build_report(logs, q.Budget(25, "day", "usd"), by, NOW)
             self.assertEqual(report["observed_spent"], 21)

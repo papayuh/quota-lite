@@ -501,6 +501,8 @@ def projection(spent, budget, elapsed, now):
     if elapsed <= 0 or spent <= 0:
         return None, None
     rate = spent / elapsed * 86400.0
+    if rate == 0.0:  # Tiny floating-point values can underflow during division.
+        return rate, None
     seconds = max(budget - spent, 0.0) / rate * 86400.0
     hit = None
     if math.isfinite(seconds) and seconds <= 2**63 - 1 - now:
@@ -567,7 +569,7 @@ def text_report(report):
     within = report["projection_within_window"]
     lines = [
         f"estimate: true (list prices {report['pricing_date']}, UTC calendar windows)",
-        f"budget: {report['budget']:g} {report['unit']} / {report['period']}",
+        f"budget: {str(report['budget']).removesuffix('.0')} {report['unit']} / {report['period']}",
         f"window: {report['window_start']} .. {report['window_end_exclusive']} (exclusive)",
         f"observed: {number(report['observed_spent'])} | remaining: {number(report['remaining'])} "
         f"| burn/day: {number(report['burn_per_day'])}",

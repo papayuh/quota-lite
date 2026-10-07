@@ -264,6 +264,7 @@ class CalendarAndPricingTests(unittest.TestCase):
         self.assertEqual(q.projection(21, 20, 86400, 86400)[1], 86400)
         self.assertEqual(q.projection(0, 20, 86400, 86400), (None, None))
         self.assertEqual(q.projection(10, 20, 0, 0), (None, None))
+        self.assertEqual(q.projection(5e-324, 25, 86400, NOW), (0.0, None))
 
     def test_retention_and_stale_price_boundaries(self):
         budget = q.Budget(25, "month", "usd")
@@ -313,6 +314,10 @@ class CliAndPromptTests(unittest.TestCase):
             with mock.patch.object(sys, "stdin", io.StringIO(value)), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(ValueError):
                     q.prompt_budget()
+
+    def test_budget_text_preserves_precision(self):
+        report = q.build_report(q.Logs(), q.Budget(25.123456789, "day", "usd"), "project", NOW)
+        self.assertIn("budget: 25.123456789 usd / day", q.text_report(report))
 
     def test_help_does_not_require_home(self):
         with mock.patch.dict(os.environ, {}, clear=True), contextlib.redirect_stdout(io.StringIO()) as out:

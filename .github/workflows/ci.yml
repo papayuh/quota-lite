@@ -1,4 +1,4 @@
-name: Rust checks
+name: Python checks
 on:
   push:
   pull_request:
@@ -6,22 +6,17 @@ permissions:
   contents: read
 jobs:
   test:
-    name: ${{ matrix.os }} / Rust ${{ matrix.rust }}
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, '1.85.0']
+        python: ['3.9', '3.x']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-      - run: cargo fetch --locked
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --offline --all-targets -- -D warnings
-      - run: cargo test --locked --offline
-      - run: cargo build --release --locked --offline
-      - run: python -m unittest discover -s tests -p "test_*.py"
+          python-version: ${{ matrix.python }}
+      - run: python -m py_compile quota_lite.py test_quota_lite.py
+      - run: python -m unittest -v

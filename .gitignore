@@ -1,5 +1,3 @@
 /target/
-/vendor/
-/.cargo/config.toml
-/dist/
 __pycache__/
+*.py[cod]

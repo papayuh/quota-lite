@@ -10,7 +10,7 @@ repository = "https://github.com/papayuh/quota-lite"
 homepage = "https://github.com/papayuh/quota-lite"
 keywords = ["claude", "usage", "budget", "offline", "cli"]
 categories = ["command-line-utilities"]
-include = ["src/**", "tests/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+include = ["src/**", "tests/*.rs", "tests/fixtures/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

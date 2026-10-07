@@ -1,4 +1,5 @@
 // Gregorian UTC calendar arithmetic, independent of timezone and external crates.
+use crate::types::Period;
 pub fn days(y: i64, m: i64, d: i64) -> i64 {
     let y = y - i64::from(m <= 2);
     let era = y.div_euclid(400);
@@ -83,21 +84,21 @@ pub fn parse(s: &str) -> Option<i64> {
     };
     Some(days(y, m, d) * 86400 + h * 3600 + min * 60 + sec - offset)
 }
-pub fn window(now: i64, per: &str) -> (i64, i64) {
+pub fn window(now: i64, per: Period) -> (i64, i64) {
     let day = now.div_euclid(86400);
     match per {
-        "week" => {
+        Period::Week => {
             let start = day - (day + 3).rem_euclid(7);
             (start * 86400, (start + 7) * 86400)
         }
-        "month" => {
+        Period::Month => {
             let (y, m, _) = civil(day);
             (
                 days(y, m, 1) * 86400,
                 days(y + i64::from(m == 12), if m == 12 { 1 } else { m + 1 }, 1) * 86400,
             )
         }
-        _ => (day * 86400, (day + 1) * 86400),
+        Period::Day => (day * 86400, (day + 1) * 86400),
     }
 }
 #[cfg(test)]
@@ -120,12 +121,12 @@ mod tests {
     #[test]
     fn windows() {
         let t = parse("2024-02-29T12:00:00Z").unwrap();
-        let (a, b) = window(t, "month");
+        let (a, b) = window(t, Period::Month);
         assert_eq!(label(a), "2024-02-01");
         assert_eq!((b - a) / 86400, 29);
-        let (a, b) = window(t, "week");
+        let (a, b) = window(t, Period::Week);
         assert_eq!(label(a), "2024-02-26");
         assert_eq!((b - a) / 86400, 7);
-        assert_eq!(window(t, "day").1 - window(t, "day").0, 86400);
+        assert_eq!(window(t, Period::Day).1 - window(t, Period::Day).0, 86400);
     }
 }

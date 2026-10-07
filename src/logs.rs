@@ -152,7 +152,11 @@ fn scan_file(path: &Path, project: &str, session: &str, scan: &mut Scan) {
             logs.skipped += usize::from(active);
             continue;
         };
-        if let Some(time) = v.get("timestamp").and_then(Value::as_str).and_then(date::parse) {
+        if let Some(time) = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(date::parse)
+        {
             logs.oldest_timestamp = Some(logs.oldest_timestamp.map_or(time, |old| old.min(time)));
         }
         if !active {

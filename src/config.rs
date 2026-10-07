@@ -1,3 +1,4 @@
+use crate::types::{Period, Unit};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -16,8 +17,8 @@ pub struct Price {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Budget {
     pub amount: f64,
-    pub per: String,
-    pub unit: String,
+    pub per: Period,
+    pub unit: Unit,
 }
 #[derive(Default, Serialize, Deserialize)]
 pub struct Config {
@@ -28,11 +29,7 @@ pub struct Config {
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
         if let Some(b) = &self.budget {
-            if !b.amount.is_finite()
-                || b.amount <= 0.0
-                || !["day", "week", "month"].contains(&b.per.as_str())
-                || !["usd", "tokens", "requests"].contains(&b.unit.as_str())
-            {
+            if !b.amount.is_finite() || b.amount <= 0.0 {
                 return Err(
                     "invalid budget: positive amount, day|week|month, usd|tokens|requests required"
                         .into(),

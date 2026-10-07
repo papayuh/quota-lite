@@ -2,18 +2,32 @@ mod config;
 mod date;
 mod logs;
 mod report;
+mod types;
 use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
-const HELP:&str="quota-lite: offline personal usage budgets (estimates, not vendor quotas)\n\nquota-lite budget set <amount> --per day|week|month [--unit usd|tokens|requests] [--json]\nquota-lite [--json]\nquota-lite report --by project|model|day [--json]\nquota-lite --tui [--once]\n\nUTC calendar periods: day, Monday-based week, calendar month.\nConfig: $XDG_CONFIG_HOME/quota-lite/config.json, %APPDATA% on Windows, or ~/.config/quota-lite/config.json\nLogs: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects (home: HOME, else USERPROFILE)\nCopilot usage is unknown: local premium-request accounting is not standardized.\n--tui redraws every 30 seconds; Ctrl-C quits. --once draws one frame.\n";
+use types::{By, Period, Unit};
+const HELP: &str = concat!(
+    "quota-lite: offline personal usage budgets (estimates, not vendor quotas)\n\n",
+    "quota-lite budget set <amount> --per day|week|month [--unit usd|tokens|requests] [--json]\n",
+    "quota-lite [--json]\n",
+    "quota-lite report --by project|model|day [--json]\n",
+    "quota-lite --tui [--once]\n\n",
+    "UTC calendar periods: day, Monday-based week, calendar month.\n",
+    "Config: $XDG_CONFIG_HOME/quota-lite/config.json, %APPDATA% on Windows, ",
+    "or ~/.config/quota-lite/config.json\n",
+    "Logs: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects (home: HOME, else USERPROFILE)\n",
+    "Copilot usage is unknown: local premium-request accounting is not standardized.\n",
+    "--tui redraws every 30 seconds; Ctrl-C quits. --once draws one frame.\n",
+);
 #[derive(Debug)]
 struct Args {
     amount: Option<f64>,
-    per: String,
-    unit: String,
-    by: String,
+    per: Period,
+    unit: Unit,
+    by: By,
     json: bool,
     tui: bool,
     once: bool,
@@ -22,9 +36,9 @@ struct Args {
 fn args(values: Vec<String>) -> Result<Args, String> {
     let mut a = Args {
         amount: None,
-        per: "month".into(),
-        unit: "usd".into(),
-        by: "project".into(),
+        per: Period::Month,
+        unit: Unit::Usd,
+        by: By::Project,
         json: false,
         tui: false,
         once: false,
@@ -69,21 +83,21 @@ fn args(values: Vec<String>) -> Result<Args, String> {
                         if per {
                             return Err("duplicate --per".into());
                         }
-                        a.per = value;
+                        a.per = value.parse()?;
                         per = true;
                     }
                     "--unit" => {
                         if unit {
                             return Err("duplicate --unit".into());
                         }
-                        a.unit = value;
+                        a.unit = value.parse()?;
                         unit = true;
                     }
                     _ => {
                         if by {
                             return Err("duplicate --by".into());
                         }
-                        a.by = value;
+                        a.by = value.parse()?;
                         by = true;
                     }
                 }
@@ -102,15 +116,12 @@ fn args(values: Vec<String>) -> Result<Args, String> {
     {
         return Err("incompatible flags; use --help".into());
     }
-    if !["project", "model", "day"].contains(&a.by.as_str()) {
-        return Err("--by must be project|model|day".into());
-    }
     if set {
         config::Config {
             budget: Some(config::Budget {
                 amount: a.amount.unwrap(),
-                per: a.per.clone(),
-                unit: a.unit.clone(),
+                per: a.per,
+                unit: a.unit,
             }),
             ..Default::default()
         }
@@ -140,8 +151,8 @@ fn prompt() -> Result<config::Budget, String> {
     let amount = ask("Personal budget amount: ", "")?
         .parse()
         .map_err(|_| "invalid amount")?;
-    let per = ask("Period day|week|month [month]: ", "month")?;
-    let unit = ask("Unit usd|tokens|requests [usd]: ", "usd")?;
+    let per = ask("Period day|week|month [month]: ", "month")?.parse()?;
+    let unit = ask("Unit usd|tokens|requests [usd]: ", "usd")?.parse()?;
     Ok(config::Budget { amount, per, unit })
 }
 fn run() -> Result<(), String> {
@@ -194,9 +205,9 @@ fn run() -> Result<(), String> {
             .map_err(|_| "system clock predates 1970")?
             .as_secs() as i64;
         let r = report::build(
-            logs::read(&root, &c, date::window(now, &b.per).0),
+            logs::read(&root, &c, date::window(now, b.per).0),
             b,
-            &a.by,
+            a.by,
             now,
         );
         if a.json {
@@ -238,6 +249,8 @@ mod tests {
             "budget set -1 --per day",
             "budget set 20",
             "budget set 1 --per year",
+            "budget set 1 --per day --unit invalid",
+            "report --by session",
             "--per day",
             "report --by invalid",
             "report",

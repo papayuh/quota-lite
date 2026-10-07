@@ -1,5 +1,7 @@
 #[path = "../src/date.rs"]
 mod date;
+#[path = "../src/types.rs"]
+mod types;
 use serde_json::Value;
 use std::{
     fs,
@@ -98,6 +100,37 @@ fn e2e_dedup_unknown_prices_and_units() {
     assert!(r["observed_spent"].is_null());
     assert_eq!(r["breakdown"], serde_json::json!([]));
     assert!(s.run(&["--tui", "--once"]).status.success());
+}
+#[test]
+fn no_usage_and_invalid_config_choices() {
+    let s = Sandbox::new();
+    for unit in ["usd", "tokens"] {
+        assert!(s
+            .run(&["budget", "set", "25", "--per", "month", "--unit", unit])
+            .status
+            .success());
+        let r = s.json(&["--json"]);
+        assert_eq!(
+            r["observed_spent"].as_f64().unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(r["remaining"], 25.0);
+        assert!(!String::from_utf8(s.run(&[]).stdout)
+            .unwrap()
+            .contains("-0.0000"));
+    }
+    let path = s.0.join("config/quota-lite/config.json");
+    for budget in [
+        serde_json::json!({"amount":25,"per":"year","unit":"usd"}),
+        serde_json::json!({"amount":25,"per":"day","unit":"dollars"}),
+    ] {
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"budget":budget})).unwrap(),
+        )
+        .unwrap();
+        assert!(!s.run(&["--json"]).status.success());
+    }
 }
 #[test]
 fn overrides_malformed_and_subagents() {

@@ -5,6 +5,9 @@ use crate::{
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+const PRICING_DATE: &str = "2026-10-06";
+const RETENTION_WARNING: &str = "Report window starts before the oldest retained transcript. Totals and burn rate are lower bounds; remaining and projection may be optimistic. Claude Code cleanupPeriodDays defaults to 30 days and may be set lower by admins; missing history may also reflect a new installation.";
+const STALE_PRICING_WARNING: &str = "Built-in price table was checked more than 90 days ago; estimates may use outdated rates. Check current prices and configure overrides.";
 #[derive(Serialize)]
 pub struct Row {
     pub name: String,
@@ -90,7 +93,7 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
     let spent = if requests {
         None
     } else {
-        Some(events.iter().map(|e| value(e, &b.unit)).sum::<f64>())
+        Some(events.iter().fold(0.0, |sum, e| sum + value(e, &b.unit)))
     };
     let incomplete = requests || (b.unit == "usd" && unknown > 0);
     let (burn, hit) = if incomplete {
@@ -117,6 +120,13 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
         }
     }
     let mut attention=vec!["Copilot premium requests, multipliers and costs are unmeasurable from supported local logs. No message-count proxy is used; requests budgets have unknown usage.".into(),"Local log coverage only; subscriptions, discounts, missing/deleted logs and vendor quotas are not measured.".into()];
+    if logs.oldest_timestamp.is_some_and(|oldest| start < oldest) {
+        attention.push(RETENTION_WARNING.into());
+    }
+    let checked = date::parse(&format!("{PRICING_DATE}T00:00:00Z")).expect("valid pricing date");
+    if now - checked > 90 * 86400 {
+        attention.push(STALE_PRICING_WARNING.into());
+    }
     if logs.files == 0 {
         attention.push("No Claude JSONL session logs modified this period; observed totals do not establish zero actual usage.".into());
     }
@@ -128,7 +138,7 @@ pub fn build(logs: Logs, b: &Budget, by: &str, now: i64) -> Report {
     }
     Report {
         estimate: true,
-        pricing_date: "2026-10-06",
+        pricing_date: PRICING_DATE,
         unit: b.unit.clone(),
         period: b.per.clone(),
         window_start: date::label(start),
@@ -206,6 +216,34 @@ pub fn text(r: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn empty_report(now: i64, oldest_timestamp: Option<i64>) -> Report {
+        build(
+            Logs { oldest_timestamp, ..Logs::default() },
+            &Budget { amount: 25.0, per: "month".into(), unit: "usd".into() },
+            "project",
+            now,
+        )
+    }
+    #[test]
+    fn no_usage_is_positive_zero() {
+        let r = empty_report(date::parse("2026-10-06T12:00:00Z").unwrap(), None);
+        assert_eq!(r.observed_spent.unwrap().to_bits(), 0.0_f64.to_bits());
+        assert!(!text(&r).contains("-0.0000"));
+        assert_eq!(r.remaining, Some(25.0));
+        assert!(r.burn_per_day.is_none());
+    }
+    #[test]
+    fn retention_and_stale_price_boundaries() {
+        let now = date::parse("2026-10-06T12:00:00Z").unwrap();
+        let start = date::window(now, "month").0;
+        for (oldest, warn) in [(None, false), (Some(start - 1), false), (Some(start), false), (Some(start + 1), true)] {
+            assert_eq!(empty_report(now, oldest).attention.iter().any(|s| s == RETENTION_WARNING), warn);
+        }
+        let checked = date::parse("2026-10-06T00:00:00Z").unwrap();
+        for (age, warn) in [(90 * 86400, false), (90 * 86400 + 1, true)] {
+            assert_eq!(empty_report(checked + age, None).attention.iter().any(|s| s == STALE_PRICING_WARNING), warn);
+        }
+    }
     #[test]
     fn burn() {
         assert_eq!(

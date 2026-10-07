@@ -22,6 +22,8 @@ pub struct Event {
 #[derive(Default)]
 pub struct Logs {
     pub events: Vec<Event>,
+    /// Earliest valid transcript timestamp, including files outside the report window.
+    pub oldest_timestamp: Option<i64>,
     pub files: usize,
     pub skipped: usize,
     pub unreadable: usize,
@@ -100,18 +102,15 @@ struct Scan<'a> {
 }
 fn scan_file(path: &Path, project: &str, session: &str, scan: &mut Scan) {
     let cutoff = UNIX_EPOCH + Duration::from_secs(scan.since.max(0) as u64);
-    if fs::metadata(path)
+    let active = !fs::metadata(path)
         .and_then(|m| m.modified())
-        .is_ok_and(|t| t < cutoff)
-    {
-        return;
-    }
+        .is_ok_and(|t| t < cutoff);
     let (c, logs, messages) = (scan.config, &mut scan.logs, &mut scan.messages);
     let Ok(file) = File::open(path) else {
-        logs.unreadable += 1;
+        logs.unreadable += usize::from(active);
         return;
     };
-    logs.files += 1;
+    logs.files += usize::from(active);
     let mut reader = BufReader::new(file);
     let mut bytes = Vec::new();
     loop {
@@ -120,7 +119,7 @@ fn scan_file(path: &Path, project: &str, session: &str, scan: &mut Scan) {
         let mut oversized = false;
         loop {
             let Ok(buf) = reader.fill_buf() else {
-                logs.unreadable += 1;
+                logs.unreadable += usize::from(active);
                 return;
             };
             if buf.is_empty() {
@@ -143,16 +142,22 @@ fn scan_file(path: &Path, project: &str, session: &str, scan: &mut Scan) {
             }
         }
         if oversized {
-            logs.skipped += 1;
+            logs.skipped += usize::from(active);
             continue;
         }
         if bytes.is_empty() {
             break;
         }
         let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
-            logs.skipped += 1;
+            logs.skipped += usize::from(active);
             continue;
         };
+        if let Some(time) = v.get("timestamp").and_then(Value::as_str).and_then(date::parse) {
+            logs.oldest_timestamp = Some(logs.oldest_timestamp.map_or(time, |old| old.min(time)));
+        }
+        if !active {
+            continue;
+        }
         if let Some((id, e)) = event(&v, project, session, c) {
             // Streaming assistant snapshots repeat message.id; latest usage wins.
             messages.insert(id, e);
